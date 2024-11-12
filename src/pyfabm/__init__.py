@@ -3,6 +3,7 @@ import os
 import ctypes
 import re
 import logging
+import enum
 from typing import (
     MutableMapping,
     Optional,
@@ -10,9 +11,11 @@ from typing import (
     Iterable,
     Union,
     Callable,
-    Any,
     Mapping,
     Sequence,
+    TypeVar,
+    List,
+    Dict,
 )
 
 try:
@@ -247,12 +250,6 @@ def get_lib(name: str) -> ctypes.CDLL:
         ctypes.c_char_p,
     ]
     lib.variable_get_long_path.restype = None
-    lib.variable_get_output_name.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-    ]
-    lib.variable_get_output_name.restype = None
     lib.variable_get_suitable_masters.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     lib.variable_get_suitable_masters.restype = ctypes.c_void_p
     lib.variable_get_output.argtypes = [ctypes.c_void_p]
@@ -458,6 +455,15 @@ CONSERVED_QUANTITY = 6
 INTERIOR_DEPENDENCY = 7
 HORIZONTAL_DEPENDENCY = 8
 SCALAR_DEPENDENCY = 9
+
+
+class DataType(enum.IntEnum):
+    REAL = 1
+    INTEGER = 2
+    LOGICAL = 3
+    STRING = 4
+
+
 ATTRIBUTE_LENGTH = 256
 
 DISPLAY_MINIMUM = 0
@@ -465,29 +471,29 @@ DISPLAY_NORMAL = 1
 DISPLAY_ADVANCED = 2
 
 unicodesuperscript = {
-    "1": "\u00B9",
-    "2": "\u00B2",
-    "3": "\u00B3",
-    "4": "\u2074",
-    "5": "\u2075",
-    "6": "\u2076",
-    "7": "\u2077",
-    "8": "\u2078",
-    "9": "\u2079",
-    "0": "\u2070",
-    "-": "\u207B",
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+    "-": "⁻",
 }
 unicodesubscript = {
-    "1": "\u2081",
-    "2": "\u2082",
-    "3": "\u2083",
-    "4": "\u2084",
-    "5": "\u2085",
-    "6": "\u2086",
-    "7": "\u2087",
-    "8": "\u2088",
-    "9": "\u2089",
-    "0": "\u2080",
+    "0": "₀",
+    "1": "₁",
+    "2": "₂",
+    "3": "₃",
+    "4": "₄",
+    "5": "₅",
+    "6": "₆",
+    "7": "₇",
+    "8": "₈",
+    "9": "₉",
 }
 supnumber = re.compile(r"(?<=\w)(-?\d+)(?=[ \*+\-/]|$)")
 supenumber = re.compile(r"(?<=\d)e(-?\d+)(?=[ \*+\-/]|$)")
@@ -504,10 +510,10 @@ def createPrettyUnit(unit: str) -> str:
         return "".join([unicodesubscript[n] for n in m.group(1)])
 
     def reple(m: re.Match) -> str:
-        return "\u00D710%s" % "".join([unicodesuperscript[n] for n in m.group(1)])
+        return "×10%s" % "".join([unicodesuperscript[n] for n in m.group(1)])
 
     def reploldminus(m: re.Match) -> str:
-        return " %s\u207B%s" % (
+        return " %s⁻%s" % (
             m.group(1),
             "".join([unicodesuperscript[n] for n in m.group(2)]),
         )
@@ -541,15 +547,18 @@ def getError() -> Optional[str]:
             return strmessage.value.decode("ascii")
 
 
-NodeType = Mapping[str, Any]
+NodeValue = TypeVar("NodeValue")
+NodeType = Mapping[str, Union["NodeType", NodeValue]]
 
 
-def printTree(root: NodeType, stringmapper: Callable[[Any], str], indent=""):
+def printTree(
+    root: NodeType, stringmapper: Callable[[NodeValue], str], indent: str = ""
+):
     """Print an indented tree of objects, encoded by dictionaries linking the
     names of children to their subtree, or to their object. Objects are finally
     printed as string obtained by calling the provided stringmapper method."""
     for name, item in root.items():
-        if isinstance(item, NodeType):
+        if isinstance(item, Mapping):
             log(f"{indent}{name}")
             printTree(item, stringmapper, indent + "   ")
         else:
@@ -559,24 +568,24 @@ def printTree(root: NodeType, stringmapper: Callable[[Any], str], indent=""):
 class VariableProperties:
     def __init__(self, model: "Model", variable_pointer: ctypes.c_void_p):
         self.model = model
-        self.variable_pointer = variable_pointer
+        self._pvariable = variable_pointer
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> Union[float, int, bool]:
         typecode = self.model.fabm.variable_get_property_type(
-            self.variable_pointer, key.encode("ascii")
+            self._pvariable, key.encode("ascii")
         )
-        if typecode == 1:
+        if typecode == DataType.REAL:
             return self.model.fabm.variable_get_real_property(
-                self.variable_pointer, key.encode("ascii"), -1.0
+                self._pvariable, key.encode("ascii"), -1.0
             )
-        elif typecode == 2:
+        elif typecode == DataType.INTEGER:
             return self.model.fabm.variable_get_integer_property(
-                self.variable_pointer, key.encode("ascii"), 0
+                self._pvariable, key.encode("ascii"), 0
             )
-        elif typecode == 3:
+        elif typecode == DataType.LOGICAL:
             return (
                 self.model.fabm.variable_get_logical_property(
-                    self.variable_pointer, key.encode("ascii"), 0
+                    self._pvariable, key.encode("ascii"), 0
                 )
                 != 0
             )
@@ -587,26 +596,12 @@ class Variable(object):
     def __init__(
         self,
         model: "Model",
-        name: Optional[str] = None,
-        units: Optional[str] = None,
-        long_name: Optional[str] = None,
+        name: str,
+        units: str,
+        long_name: str,
         path: Optional[str] = None,
-        variable_pointer: Optional[ctypes.c_void_p] = None,
     ):
         self.model = model
-        self.variable_pointer = variable_pointer
-        if variable_pointer:
-            strname = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
-            strunits = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
-            strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
-            self.model.fabm.variable_get_metadata(
-                variable_pointer, ATTRIBUTE_LENGTH, strname, strunits, strlong_name
-            )
-            name = strname.value.decode("ascii")
-            units = strunits.value.decode("ascii")
-            long_name = strlong_name.value.decode("ascii")
-            self.properties = VariableProperties(self.model, self.variable_pointer)
-
         self.name = name
         self.units = units
         self.units_unicode = None if units is None else createPrettyUnit(units)
@@ -615,42 +610,62 @@ class Variable(object):
 
     @property
     def long_path(self) -> str:
-        if self.variable_pointer is None:
-            return self.long_name
+        return self.long_name
+
+    @property
+    def output_name(self) -> str:
+        """Name suitable for output (alphanumeric characters and underscores only)"""
+        return re.sub(r"\W", "_", self.name)
+
+    @property
+    def options(self) -> Optional[Sequence]:
+        """Collection of values that this variable can take.
+        `None` if the variable is not limited to any particular value."""
+        return None
+
+    def __repr__(self) -> str:
+        postfix = f"={self.value}" if hasattr(self, "value") else ""
+        return f"<{self.name}{postfix}>"
+
+
+class VariableFromPointer(Variable):
+    def __init__(self, model: "Model", variable_pointer: ctypes.c_void_p):
+        strname = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
+        strunits = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
+        strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
+        model.fabm.variable_get_metadata(
+            variable_pointer, ATTRIBUTE_LENGTH, strname, strunits, strlong_name
+        )
+        name = strname.value.decode("ascii")
+        units = strunits.value.decode("ascii")
+        long_name = strlong_name.value.decode("ascii")
+
+        super().__init__(model, name, units, long_name)
+
+        self._pvariable = variable_pointer
+        self.properties = VariableProperties(self.model, self._pvariable)
+
+    @property
+    def long_path(self) -> str:
+        """Long model instance name, followed by a slash, followed by long variable name."""
         strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
         self.model.fabm.variable_get_long_path(
-            self.variable_pointer, ATTRIBUTE_LENGTH, strlong_name
+            self._pvariable, ATTRIBUTE_LENGTH, strlong_name
         )
         return strlong_name.value.decode("ascii")
 
     @property
-    def output_name(self) -> str:
-        if self.variable_pointer is None:
-            return self.name
-        stroutput_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
-        self.model.fabm.variable_get_output_name(
-            self.variable_pointer, ATTRIBUTE_LENGTH, stroutput_name
-        )
-        return stroutput_name.value.decode("ascii")
-
-    @property
-    def missing_value(self):
-        if self.variable_pointer is not None:
-            return self.model.fabm.variable_get_missing_value(self.variable_pointer)
-
-    def getOptions(self):
-        pass
+    def missing_value(self) -> float:
+        """Value that indicates missing data, for instance, on land."""
+        return self.model.fabm.variable_get_missing_value(self._pvariable)
 
     def getRealProperty(self, name, default=-1.0) -> float:
         return self.model.fabm.variable_get_real_property(
-            self.variable_pointer, name.encode("ascii"), default
+            self._pvariable, name.encode("ascii"), default
         )
 
-    def __repr__(self) -> str:
-        return f"<{self.name}={self.value}>"
 
-
-class Dependency(Variable):
+class Dependency(VariableFromPointer):
     def __init__(
         self,
         model: "Model",
@@ -658,75 +673,70 @@ class Dependency(Variable):
         shape: Tuple[int],
         link_function: Callable[[ctypes.c_void_p, ctypes.c_void_p, np.ndarray], None],
     ):
-        Variable.__init__(self, model, variable_pointer=variable_pointer)
-        self.is_set = False
-        self.link_function = link_function
-        self.shape = shape
+        super().__init__(model, variable_pointer)
+        self._is_set = False
+        self._link_function = link_function
+        self._shape = shape
 
-    def getValue(self) -> np.ndarray:
-        return None if not self.is_set else self.data
+    @property
+    def value(self) -> Optional[np.ndarray]:
+        return None if not self._is_set else self._data
 
-    def setValue(self, value: npt.ArrayLike):
-        if not self.is_set:
-            self.link(np.empty(self.shape, dtype=self.model.fabm.numpy_dtype))
-        self.data[...] = value
+    @value.setter
+    def value(self, value: npt.ArrayLike):
+        if not self._is_set:
+            self.link(np.empty(self._shape, dtype=self.model.fabm.numpy_dtype))
+        self._data[...] = value
 
     def link(self, data: np.ndarray):
-        assert data.shape == self.shape, (
+        assert data.shape == self._shape, (
             f"{self.name}: shape of provided array {data.shape}"
-            f" does not match the shape required {self.shape}"
+            f" does not match the shape required {self._shape}"
         )
-        self.data = data
-        self.link_function(self.model.pmodel, self.variable_pointer, self.data)
-        self.is_set = True
-
-    value = property(getValue, setValue)
+        self._data = data
+        self._link_function(self.model.pmodel, self._pvariable, self._data)
+        self._is_set = True
 
     @property
     def required(self) -> bool:
-        return self.model.fabm.variable_is_required(self.variable_pointer) != 0
+        return self.model.fabm.variable_is_required(self._pvariable) != 0
 
 
-class StateVariable(Variable):
+class StateVariable(VariableFromPointer):
     def __init__(
         self, model: "Model", variable_pointer: ctypes.c_void_p, data: np.ndarray
     ):
-        Variable.__init__(self, model, variable_pointer=variable_pointer)
-        self.data = data
+        super().__init__(model, variable_pointer)
+        self._data = data
 
-    def getValue(self) -> np.ndarray:
-        return self.data
+    @property
+    def value(self) -> np.ndarray:
+        return self._data
 
-    def setValue(self, value: npt.ArrayLike):
-        self.data[...] = value
-
-    value = property(getValue, setValue)
+    @value.setter
+    def value(self, value: npt.ArrayLike):
+        self._data[...] = value
 
     @property
     def background_value(self) -> float:
-        return self.model.fabm.variable_get_background_value(self.variable_pointer)
+        return self.model.fabm.variable_get_background_value(self._pvariable)
 
     @property
     def output(self) -> bool:
-        return self.model.fabm.variable_get_output(self.variable_pointer) != 0
+        return self.model.fabm.variable_get_output(self._pvariable) != 0
 
     @property
     def no_river_dilution(self) -> bool:
-        return (
-            self.model.fabm.variable_get_no_river_dilution(self.variable_pointer) != 0
-        )
+        return self.model.fabm.variable_get_no_river_dilution(self._pvariable) != 0
 
     @property
     def no_precipitation_dilution(self) -> bool:
         return (
-            self.model.fabm.variable_get_no_precipitation_dilution(
-                self.variable_pointer
-            )
-            != 0
+            self.model.fabm.variable_get_no_precipitation_dilution(self._pvariable) != 0
         )
 
 
-class DiagnosticVariable(Variable):
+class DiagnosticVariable(VariableFromPointer):
     def __init__(
         self,
         model: "Model",
@@ -734,31 +744,32 @@ class DiagnosticVariable(Variable):
         index: int,
         horizontal: bool,
     ):
-        Variable.__init__(self, model, variable_pointer=variable_pointer)
-        self.data = None
-        self.horizontal = horizontal
-        self.index = index
+        super().__init__(model, variable_pointer)
+        self._data = None
+        self._horizontal = horizontal
+        self._index = index + 1
 
-    def getValue(self) -> Optional[np.ndarray]:
-        return self.data
-
-    value = property(getValue)
+    @property
+    def value(self) -> Optional[np.ndarray]:
+        return self._data
 
     @property
     def output(self) -> bool:
-        return self.model.fabm.variable_get_output(self.variable_pointer) != 0
+        """Whether this diagnostic is meant to be included in output by default"""
+        return self.model.fabm.variable_get_output(self._pvariable) != 0
 
-    def setSave(self, value: bool):
-        self.model.fabm.set_variable_save(
-            self.model.pmodel,
+    def _set_save(self, value: bool):
+        vartype = (
             HORIZONTAL_DIAGNOSTIC_VARIABLE
-            if self.horizontal
-            else INTERIOR_DIAGNOSTIC_VARIABLE,
-            self.index,
-            1 if value else 0,
+            if self._horizontal
+            else INTERIOR_DIAGNOSTIC_VARIABLE
+        )
+        self.model.fabm.set_variable_save(
+            self.model.pmodel, vartype, self._index, 1 if value else 0
         )
 
-    save = property(fset=setSave)
+    #: Whether the value of this diagnostic must be calculated, for instance, for output
+    save: bool = property(fset=_set_save)
 
 
 class Parameter(Variable):
@@ -769,132 +780,151 @@ class Parameter(Variable):
         index: int,
         units: Optional[str] = None,
         long_name: Optional[str] = None,
-        type: Optional[int] = None,
+        type: Optional[DataType] = None,
         has_default: bool = False,
     ):
-        Variable.__init__(self, model, name, units, long_name)
-        self.type = type
-        self.index = index + 1
-        self.has_default = has_default
+        super().__init__(model, name, units, long_name)
+        self._type = type
+        self._index = index + 1
+        self._has_default = has_default
 
-    def getValue(self, default: bool = False):
+    def _get_value(self, *, default: bool = False):
         default = 1 if default else 0
-        if self.type == 1:
+        if self._type == DataType.REAL:
             return self.model.fabm.get_real_parameter(
-                self.model.pmodel, self.index, default
+                self.model.pmodel, self._index, default
             )
-        elif self.type == 2:
+        elif self._type == DataType.INTEGER:
             return self.model.fabm.get_integer_parameter(
-                self.model.pmodel, self.index, default
+                self.model.pmodel, self._index, default
             )
-        elif self.type == 3:
+        elif self._type == DataType.LOGICAL:
             return (
                 self.model.fabm.get_logical_parameter(
-                    self.model.pmodel, self.index, default
+                    self.model.pmodel, self._index, default
                 )
                 != 0
             )
-        elif self.type == 4:
+        elif self._type == DataType.STRING:
             result = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
             self.model.fabm.get_string_parameter(
-                self.model.pmodel, self.index, default, ATTRIBUTE_LENGTH, result
+                self.model.pmodel, self._index, default, ATTRIBUTE_LENGTH, result
             )
             return result.value.decode("ascii")
 
-    def setValue(self, value):
-        settings = self.model.save_state()
+    @property
+    def value(self) -> Union[float, int, bool, str]:
+        return self._get_value()
 
-        if self.type == 1:
+    @value.setter
+    def value(self, value: Union[float, int, bool, str]):
+        settings = self.model._save_state()
+
+        if self._type == DataType.REAL:
             self.model.fabm.set_real_parameter(
                 self.model.pmodel, self.name.encode("ascii"), value
             )
-        elif self.type == 2:
+        elif self._type == DataType.INTEGER:
             self.model.fabm.set_integer_parameter(
                 self.model.pmodel, self.name.encode("ascii"), value
             )
-        elif self.type == 3:
+        elif self._type == DataType.LOGICAL:
             self.model.fabm.set_logical_parameter(
                 self.model.pmodel, self.name.encode("ascii"), value
             )
-        elif self.type == 4:
+        elif self._type == DataType.STRING:
             self.model.fabm.set_string_parameter(
                 self.model.pmodel, self.name.encode("ascii"), value.encode("ascii")
             )
 
         # Update the model configuration
         # (arrays with variables and parameters have changed)
-        self.model.updateConfiguration(settings)
+        self.model._update_configuration(settings)
 
-    def getDefault(self):
-        if not self.has_default:
+    @property
+    def default(self) -> Union[float, int, bool, str, None]:
+        """Default value for this parameter (`None` if no default is set)"""
+        if not self._has_default:
             return None
-        return self.getValue(True)
+        return self._get_value(default=True)
 
     def reset(self):
-        settings = self.model.save_state()
-        self.model.fabm.reset_parameter(self.model.pmodel, self.index)
-        self.model.updateConfiguration(settings)
-
-    value = property(getValue, setValue)
-    default = property(getDefault)
+        """Reset this parameter to its default value"""
+        settings = self.model._save_state()
+        self.model.fabm.reset_parameter(self.model.pmodel, self._index)
+        self.model._update_configuration(settings)
 
 
 class StandardVariable:
     def __init__(self, model: "Model", pointer: ctypes.c_void_p):
         self.model = model
-        self.pointer = pointer
+        self._pvariable = pointer
 
     @property
-    def value(self):
+    def value(self) -> np.ndarray:
         horizontal = ctypes.c_int()
         pdata = self.model.fabm.get_standard_variable_data(
-            self.model.pmodel, self.pointer, horizontal
+            self.model.pmodel, self._pvariable, horizontal
         )
         if horizontal.value == 0:
             shape = self.model.interior_domain_shape
         else:
             shape = self.model.horizontal_domain.shape
-        return np.ctypeslib.as_array(pdata, shape).newbyteorder("=")
+        arr = np.ctypeslib.as_array(pdata, shape)
+        return arr.view(dtype=self.model.fabm.numpy_dtype)
 
 
-class NamedObjectList(Sequence):
-    def __init__(self, *data: Iterable):
-        self._data = []
+T = TypeVar("T")
+
+
+class NamedObjectList(Sequence[T]):
+    def __init__(self, *data: Iterable[T]):
+        self._data: List[T] = []
         for d in data:
             self._data.extend(d)
-        self._lookup = None
-        self._lookup_ci = None
+        self._lookup: Optional[Dict[str, T]] = None
+        self._lookup_ci: Optional[Dict[str, T]] = None
 
     def __len__(self) -> int:
         return len(self._data)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Union[int, str]) -> T:
         if isinstance(key, str):
             return self.find(key)
         return self._data[key]
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: Union[T, str]) -> bool:
         if isinstance(key, str):
             try:
                 self.find(key)
                 return True
             except KeyError:
                 return False
-        return super().__contains__(key)
+        return key in self._data
+
+    def index(self, key: Union[T, str], *args) -> int:
+        if isinstance(key, str):
+            try:
+                key = self.find(key)
+            except KeyError:
+                raise ValueError from None
+        return self._data.index(key, *args)
 
     def __repr__(self) -> str:
         return repr(self._data)
 
-    def __add__(self, other: "NamedObjectList") -> "NamedObjectList":
+    def __add__(self, other: "NamedObjectList[T]") -> "NamedObjectList[T]":
         return NamedObjectList(self._data, other._data)
 
-    def find(self, name: str, case_insensitive: bool = False):
-        if self._lookup is None:
-            self._lookup_ci = dict([(obj.name.lower(), obj) for obj in self._data])
-            self._lookup = dict([(obj.name, obj) for obj in self._data])
+    def find(self, name: str, case_insensitive: bool = False) -> T:
         if case_insensitive:
+            if self._lookup_ci is None:
+                self._lookup_ci = {obj.name.lower(): obj for obj in self._data}
             return self._lookup_ci[name.lower()]
-        return self._lookup[name]
+        else:
+            if self._lookup is None:
+                self._lookup = {obj.name: obj for obj in self._data}
+            return self._lookup[name]
 
     def clear(self):
         self._data.clear()
@@ -902,54 +932,50 @@ class NamedObjectList(Sequence):
         self._lookup_ci = None
 
 
-class Coupling(Variable):
+class Coupling(VariableFromPointer):
     def __init__(self, model: "Model", index: int):
-        self.model = model
-        self.master = ctypes.c_void_p()
-        self.slave = ctypes.c_void_p()
-        self.model.fabm.get_coupling(
-            self.model.pmodel,
-            index,
-            ctypes.byref(self.slave),
-            ctypes.byref(self.master),
+        self._ptarget = ctypes.c_void_p()
+        self._psource = ctypes.c_void_p()
+        model.fabm.get_coupling(
+            model.pmodel,
+            index + 1,
+            ctypes.byref(self._psource),
+            ctypes.byref(self._ptarget),
         )
-        Variable.__init__(self, model, variable_pointer=self.slave)
+        super().__init__(model, self._psource)
+        self._options = None
 
-    def getValue(self) -> str:
+    @property
+    def value(self) -> Optional[str]:
+        if self._psource.value == self._ptarget.value:
+            return
         strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
         self.model.fabm.variable_get_long_path(
-            self.master, ATTRIBUTE_LENGTH, strlong_name
+            self._ptarget, ATTRIBUTE_LENGTH, strlong_name
         )
         return strlong_name.value.decode("ascii")
 
-    def setValue(self, value: str):
+    @value.setter
+    def value(self, value: str):
         log(f"New coupling specified: {value}")
         pass
 
-    def getOptions(self):
-        options = []
-        list = self.model.fabm.variable_get_suitable_masters(
-            self.model.pmodel, self.slave
-        )
-        strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
-        for i in range(self.model.fabm.link_list_count(list)):
-            variable = self.model.fabm.link_list_index(list, i + 1)
-            self.model.fabm.variable_get_long_path(
-                variable, ATTRIBUTE_LENGTH, strlong_name
-            )
-            options.append(strlong_name.value.decode("ascii"))
-        self.model.fabm.link_list_finalize(list)
-        return options
-
     @property
-    def long_path(self) -> str:
-        strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
-        self.model.fabm.variable_get_long_path(
-            self.slave, ATTRIBUTE_LENGTH, strlong_name
-        )
-        return strlong_name.value.decode("ascii")
-
-    value = property(getValue, setValue)
+    def options(self) -> Sequence[str]:
+        if self._options is None:
+            self._options: List[str] = []
+            plist = self.model.fabm.variable_get_suitable_masters(
+                self.model.pmodel, self._psource
+            )
+            strlong_name = ctypes.create_string_buffer(ATTRIBUTE_LENGTH)
+            for i in range(self.model.fabm.link_list_count(plist)):
+                variable = self.model.fabm.link_list_index(plist, i + 1)
+                self.model.fabm.variable_get_long_path(
+                    variable, ATTRIBUTE_LENGTH, strlong_name
+                )
+                self._options.append(strlong_name.value.decode("ascii"))
+            self.model.fabm.link_list_finalize(plist)
+        return self._options
 
 
 class SubModel(object):
@@ -966,7 +992,7 @@ class SubModel(object):
 class Model(object):
     def __init__(
         self,
-        path: str = "fabm.yaml",
+        path: Union[str, dict] = "fabm.yaml",
         shape: Tuple[int] = (),
         libname: Optional[str] = None,
         start: Optional[Tuple[int]] = None,
@@ -1023,18 +1049,20 @@ class Model(object):
         if delete:
             os.remove(path)
 
-        self.interior_state_variables = NamedObjectList()
-        self.surface_state_variables = NamedObjectList()
-        self.bottom_state_variables = NamedObjectList()
-        self.interior_diagnostic_variables = NamedObjectList()
-        self.horizontal_diagnostic_variables = NamedObjectList()
-        self.conserved_quantities = NamedObjectList()
-        self.parameters = NamedObjectList()
-        self.interior_dependencies = NamedObjectList()
-        self.horizontal_dependencies = NamedObjectList()
-        self.scalar_dependencies = NamedObjectList()
+        # fmt: off
+        self.interior_state_variables: NamedObjectList[StateVariable] = NamedObjectList()
+        self.surface_state_variables: NamedObjectList[StateVariable] = NamedObjectList()
+        self.bottom_state_variables: NamedObjectList[StateVariable] = NamedObjectList()
+        self.interior_diagnostic_variables: NamedObjectList[DiagnosticVariable] = NamedObjectList()
+        self.horizontal_diagnostic_variables: NamedObjectList[DiagnosticVariable] = NamedObjectList()
+        self.conserved_quantities: NamedObjectList[Variable] = NamedObjectList()
+        self.parameters: NamedObjectList[Parameter] = NamedObjectList()
+        self.interior_dependencies: NamedObjectList[Dependency] = NamedObjectList()
+        self.horizontal_dependencies: NamedObjectList[Dependency] = NamedObjectList()
+        self.scalar_dependencies: NamedObjectList[Dependency] = NamedObjectList()
+        # fmt: on
 
-        self.updateConfiguration()
+        self._update_configuration()
         self._mask = None
         self._bottom_index = None
 
@@ -1061,10 +1089,15 @@ class Model(object):
         self._mask = masks
         self.fabm.set_mask(self.pmodel, *self._mask)
 
-    def _get_mask(self) -> Union[np.ndarray, Sequence[np.ndarray]]:
-        return self._mask[0] if len(self._mask) == 1 else self._mask
+    @property
+    def mask(self) -> Union[np.ndarray, Sequence[np.ndarray], None]:
+        mask = self._mask
+        if mask is not None and len(mask) == 1:
+            mask = mask[0]
+        return mask
 
-    def _set_mask(self, values: Union[npt.ArrayLike, Sequence[npt.ArrayLike]]):
+    @mask.setter
+    def mask(self, values: Union[npt.ArrayLike, Sequence[npt.ArrayLike]]):
         if self.fabm.mask_type == 1:
             values = (values,)
         if len(values) != self.fabm.mask_type:
@@ -1077,8 +1110,6 @@ class Model(object):
         for value, mask in zip(values, self._mask):
             if value is not mask:
                 mask[...] = value
-
-    mask = property(_get_mask, _set_mask)
 
     def link_bottom_index(self, indices: np.ndarray):
         if not self.fabm.variable_bottom_index:
@@ -1093,54 +1124,66 @@ class Model(object):
         self._bottom_index = indices
         self.fabm.set_bottom_index(self.pmodel, self._bottom_index)
 
-    def _get_bottom_index(self):
+    @property
+    def bottom_index(self) -> Optional[np.ndarray]:
         return self._bottom_index
 
-    def _set_bottom_index(self, indices: npt.ArrayLike):
+    @bottom_index.setter
+    def bottom_index(self, indices: npt.ArrayLike):
         if self._bottom_index is None:
             self.link_bottom_index(np.ones(self.horizontal_domain_shape, dtype=np.intc))
         if indices is not self._bottom_index:
             self._bottom_index[...] = indices
 
-    bottom_index = property(_get_bottom_index, _set_bottom_index)
-
-    def _get_state(self):
+    @property
+    def state(self) -> np.ndarray:
+        if self._state is None:
+            raise Exception(
+                "State is not available as one contiguous array because interior and"
+                " surface/bottom state variables have different shapes."
+                " Use interior_state, surface_state, bottom_state attributes instead."
+            )
         return self._state
 
-    def _set_state(self, value):
+    @state.setter
+    def state(self, value: npt.ArrayLike):
+        if self._state is None:
+            raise Exception(
+                "State is not available as one contiguous array because interior and"
+                " surface/bottom state variables have different shapes."
+                " Use interior_state, surface_state, bottom_state attributes instead."
+            )
         if value is not self._state:
             self._state[...] = value
 
-    state = property(_get_state, _set_state)
-
-    def _get_interior_state(self):
+    @property
+    def interior_state(self) -> np.ndarray:
         return self._interior_state
 
-    def _set_interior_state(self, value):
+    @interior_state.setter
+    def interior_state(self, value: npt.ArrayLike):
         if value is not self._interior_state:
             self._interior_state[...] = value
 
-    interior_state = property(_get_interior_state, _set_interior_state)
-
-    def _get_surface_state(self):
+    @property
+    def surface_state(self) -> np.ndarray:
         return self._surface_state
 
-    def _set_surface_state(self, value):
+    @surface_state.setter
+    def surface_state(self, value: npt.ArrayLike):
         if value is not self._surface_state:
             self._surface_state[...] = value
 
-    surface_state = property(_get_surface_state, _set_surface_state)
-
-    def _get_bottom_state(self):
+    @property
+    def bottom_state(self) -> np.ndarray:
         return self._bottom_state
 
-    def _set_bottom_state(self, value):
+    @bottom_state.setter
+    def bottom_state(self, value: npt.ArrayLike):
         if value is not self._bottom_state:
             self._bottom_state[...] = value
 
-    bottom_state = property(_get_bottom_state, _set_bottom_state)
-
-    def link_cell_thickness(self, data):
+    def link_cell_thickness(self, data: np.ndarray):
         assert (
             data.shape == self.interior_domain_shape
             and data.dtype == self.fabm.numpy_dtype
@@ -1148,7 +1191,7 @@ class Model(object):
         )
         self._cell_thickness = data
 
-    def setCellThickness(self, value):
+    def setCellThickness(self, value: npt.ArrayLike):
         if self._cell_thickness is None:
             self.link_cell_thickness(np.empty(self.interior_domain_shape))
         self._cell_thickness[...] = value
@@ -1159,18 +1202,18 @@ class Model(object):
         return SubModel(self, name)
 
     def save_settings(self, path: str, display: int = DISPLAY_NORMAL):
+        """Write model configuration to yaml file"""
         self.fabm.save_settings(self.pmodel, path.encode("ascii"), display)
 
-    def save_state(self) -> Tuple:
-        environment = dict(
-            [(dependency.name, dependency.value) for dependency in self.dependencies]
-        )
-        state = dict(
-            [(variable.name, variable.value) for variable in self.state_variables]
-        )
+    def _save_state(self) -> Tuple:
+        environment = {}
+        for dependency in self.dependencies:
+            if dependency.value is not None:
+                environment[dependency.name] = dependency.value
+        state = {variable.name: variable.value for variable in self.state_variables}
         return environment, state
 
-    def restore_state(self, data) -> Tuple:
+    def _restore_state(self, data: Tuple):
         environment, state = data
         for dependency in self.dependencies:
             if dependency.name in environment:
@@ -1179,7 +1222,7 @@ class Model(object):
             if variable.name in state:
                 variable.value = state[variable.name]
 
-    def updateConfiguration(self, settings=None):
+    def _update_configuration(self, settings: Optional[Tuple] = None):
         # Get number of model variables per category
         nstate_interior = ctypes.c_int()
         nstate_surface = ctypes.c_int()
@@ -1210,6 +1253,8 @@ class Model(object):
         # Allocate memory for state variable values, and send ctypes.pointer to
         # this memory to FABM.
         if self.fabm.idepthdim == -1:
+            # No depth dimension, so interior and surface/bottom variables have
+            # the same shape. Store values for all together in one contiguous array
             self._state = np.empty(
                 (nstate_interior.value + nstate_surface.value + nstate_bottom.value,)
                 + self.interior_domain_shape,
@@ -1224,6 +1269,9 @@ class Model(object):
                 nstate_interior.value + nstate_surface.value :, ...
             ]
         else:
+            # Surface/bottom variables have one dimension less than interior variables
+            # Store values for each variable type in a separate array.
+            self._state = None
             self._interior_state = np.empty(
                 (nstate_interior.value,) + self.interior_domain_shape,
                 dtype=self.fabm.numpy_dtype,
@@ -1235,18 +1283,6 @@ class Model(object):
             self._bottom_state = np.empty(
                 (nstate_bottom.value,) + self.horizontal_domain_shape,
                 dtype=self.fabm.numpy_dtype,
-            )
-        for i in range(nstate_interior.value):
-            self.fabm.link_interior_state_data(
-                self.pmodel, i + 1, self._interior_state[i, ...]
-            )
-        for i in range(nstate_surface.value):
-            self.fabm.link_surface_state_data(
-                self.pmodel, i + 1, self._surface_state[i, ...]
-            )
-        for i in range(nstate_bottom.value):
-            self.fabm.link_bottom_state_data(
-                self.pmodel, i + 1, self._bottom_state[i, ...]
             )
 
         # Retrieve variable metadata
@@ -1267,33 +1303,33 @@ class Model(object):
         self.horizontal_dependencies.clear()
         self.scalar_dependencies.clear()
         for i in range(nstate_interior.value):
+            values = self._interior_state[i, ...]
             ptr = self.fabm.get_variable(self.pmodel, INTERIOR_STATE_VARIABLE, i + 1)
-            self.interior_state_variables._data.append(
-                StateVariable(self, ptr, self._interior_state[i, ...])
-            )
+            self.interior_state_variables._data.append(StateVariable(self, ptr, values))
+            self.fabm.link_interior_state_data(self.pmodel, i + 1, values)
         for i in range(nstate_surface.value):
+            values = self._surface_state[i, ...]
             ptr = self.fabm.get_variable(self.pmodel, SURFACE_STATE_VARIABLE, i + 1)
-            self.surface_state_variables._data.append(
-                StateVariable(self, ptr, self._surface_state[i, ...])
-            )
+            self.surface_state_variables._data.append(StateVariable(self, ptr, values))
+            self.fabm.link_surface_state_data(self.pmodel, i + 1, values)
         for i in range(nstate_bottom.value):
+            values = self._bottom_state[i, ...]
             ptr = self.fabm.get_variable(self.pmodel, BOTTOM_STATE_VARIABLE, i + 1)
-            self.bottom_state_variables._data.append(
-                StateVariable(self, ptr, self._bottom_state[i, ...])
-            )
+            self.bottom_state_variables._data.append(StateVariable(self, ptr, values))
+            self.fabm.link_bottom_state_data(self.pmodel, i + 1, values)
         for i in range(ndiag_interior.value):
             ptr = self.fabm.get_variable(
                 self.pmodel, INTERIOR_DIAGNOSTIC_VARIABLE, i + 1
             )
             self.interior_diagnostic_variables._data.append(
-                DiagnosticVariable(self, ptr, i + 1, False)
+                DiagnosticVariable(self, ptr, i, False)
             )
         for i in range(ndiag_horizontal.value):
             ptr = self.fabm.get_variable(
                 self.pmodel, HORIZONTAL_DIAGNOSTIC_VARIABLE, i + 1
             )
             self.horizontal_diagnostic_variables._data.append(
-                DiagnosticVariable(self, ptr, i + 1, True)
+                DiagnosticVariable(self, ptr, i, True)
             )
         for i in range(ndependencies_interior.value):
             ptr = self.fabm.get_variable(self.pmodel, INTERIOR_DEPENDENCY, i + 1)
@@ -1361,7 +1397,7 @@ class Model(object):
             )
 
         self.couplings = NamedObjectList(
-            [Coupling(self, i + 1) for i in range(ncouplings.value)]
+            [Coupling(self, i) for i in range(ncouplings.value)]
         )
 
         # Arrays that combine variables from pelagic and boundary domains.
@@ -1378,12 +1414,12 @@ class Model(object):
             + self.horizontal_dependencies
             + self.scalar_dependencies
         )
-        self.variables = (
+        self.variables: NamedObjectList[VariableFromPointer] = (
             self.state_variables + self.diagnostic_variables + self.dependencies
         )
 
         if settings is not None:
-            self.restore_state(settings)
+            self._restore_state(settings)
 
         # For backward compatibility
         self.bulk_state_variables = self.interior_state_variables
@@ -1391,7 +1427,7 @@ class Model(object):
 
         self.itime = -1.0
 
-    def getRates(self, t: float = None, surface: bool = True, bottom: bool = True):
+    def getRates(self, t: Optional[float] = None, surface: bool = True, bottom: bool = True):
         """Returns the local rate of change in state variables,
         given the current state and environment.
         """
@@ -1428,7 +1464,7 @@ class Model(object):
 
     def get_sources(
         self,
-        t: float = None,
+        t: Optional[float] = None,
         out: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if t is None:
@@ -1536,9 +1572,9 @@ class Model(object):
             return StandardVariable(self, pointer)
 
     def require_data(self, standard_variable: StandardVariable):
-        return self.fabm.require_data(self.pmodel, standard_variable.pointer)
+        return self.fabm.require_data(self.pmodel, standard_variable._pvariable)
 
-    def getParameterTree(self):
+    def _get_parameter_tree(self) -> Mapping:
         root = {}
         for parameter in self.parameters:
             pathcomps = parameter.name.split("/")
@@ -1548,7 +1584,7 @@ class Model(object):
             parent[pathcomps[-1]] = parameter
         return root
 
-    def start(self, verbose: bool = True, stop: bool = False):
+    def start(self, verbose: bool = True, stop: bool = False) -> bool:
         ready = True
         if self.fabm.mask_type and self._mask is None:
             log("Mask not yet assigned")
@@ -1557,10 +1593,10 @@ class Model(object):
             log("Bottom indices not yet assigned")
             ready = False
 
-        def process_dependencies(dependencies):
+        def process_dependencies(dependencies: Sequence[Dependency]):
             ready = True
             for dependency in dependencies:
-                if dependency.required and not dependency.is_set:
+                if dependency.required and dependency.value is None:
                     log(f"Value for dependency {dependency.name} is not set.")
                     ready = False
             return ready
@@ -1575,22 +1611,18 @@ class Model(object):
             return False
         for i, variable in enumerate(self.interior_diagnostic_variables):
             pdata = self.fabm.get_interior_diagnostic_data(self.pmodel, i + 1)
-            variable.data = (
-                None
-                if not pdata
-                else np.ctypeslib.as_array(
-                    pdata, self.interior_domain_shape
-                ).newbyteorder("=")
-            )
+            if pdata:
+                arr = np.ctypeslib.as_array(pdata, self.interior_domain_shape)
+                variable._data = arr.view(dtype=self.fabm.numpy_dtype)
+            else:
+                variable._data = None
         for i, variable in enumerate(self.horizontal_diagnostic_variables):
             pdata = self.fabm.get_horizontal_diagnostic_data(self.pmodel, i + 1)
-            variable.data = (
-                None
-                if not pdata
-                else np.ctypeslib.as_array(
-                    pdata, self.horizontal_domain_shape
-                ).newbyteorder("=")
-            )
+            if pdata:
+                arr = np.ctypeslib.as_array(pdata, self.horizontal_domain_shape)
+                variable._data = arr.view(dtype=self.fabm.numpy_dtype)
+            else:
+                variable._data = None
         return ready
 
     checkReady = start
@@ -1601,12 +1633,15 @@ class Model(object):
     def printInformation(self):
         """Show information about the model."""
 
-        def printArray(classname: str, array: Iterable[Variable]):
+        def printArray(classname: str, array: Sequence[Variable]):
             if not array:
                 return
             log(f" {len(array)} {classname}:")
             for variable in array:
                 log(f"    {variable.name} = {variable.value} {variable.units}")
+
+        def parameter2str(p: Parameter) -> str:
+            return f"{p.value} {p.units}"
 
         log("FABM model contains the following:")
         printArray("interior state variables", self.interior_state_variables)
@@ -1617,8 +1652,8 @@ class Model(object):
             "horizontal diagnostic variables", self.horizontal_diagnostic_variables
         )
         printArray("external variables", self.dependencies)
-        log(" {len(self.parameters)} parameters:")
-        printTree(self.getParameterTree(), lambda x: f"{x.value} {x.units}", "    ")
+        log(f" {len(self.parameters)} parameters:")
+        printTree(self._get_parameter_tree(), parameter2str, "    ")
 
 
 class Simulator(object):
@@ -1628,7 +1663,14 @@ class Simulator(object):
         ), "You must assign model.cell_thickness to use Simulator"
         self.model = model
 
-    def integrate(self, y0, t, dt, surface: bool = True, bottom: bool = True):
+    def integrate(
+        self,
+        y0: np.ndarray,
+        t: np.ndarray,
+        dt: float,
+        surface: bool = True,
+        bottom: bool = True,
+    ):
         y = np.empty((t.size, self.model.state.size))
         self.model.fabm.integrate(
             self.model.pmodel,

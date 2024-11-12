@@ -105,7 +105,7 @@ def cmake(
         shutil.rmtree(build_dir)
     os.mkdir(build_dir)
 
-    if os.name == "nt":
+    if os.name == "nt" and os.environ.get("CMAKE_GENERATOR", "") != "Ninja":
         x64 = sys.maxsize > 2**32
         cmake_arguments = ["-A", "x64" if x64 else "Win32"] + cmake_arguments
 
@@ -366,7 +366,13 @@ def test_pyfabm(args, testcases: Mapping[str, str]):
         print(f"  {case}... ", end="")
         sys.stdout.flush()
         m0d = pyfabm.Model(path)
+        counts = collections.Counter(v.name for v in m0d.variables).items()
+        dup = [v for v, c in counts if c > 1]
+        assert not dup, f"Duplicate variable names in 0D: {dup}"
         m1d = pyfabm.Model(path, shape=(5,))
+        counts = collections.Counter(v.name for v in m1d.variables).items()
+        dup = [v for v, c in counts if c > 1]
+        assert not dup, f"Duplicate variable names in 1D: {dup}"
         for m in (m0d, m1d):
             m.cell_thickness = environment["cell_thickness"]
             for d in m.dependencies:
@@ -446,14 +452,16 @@ def test_harness(args, testcases: Mapping[str, str]):
         )
         if not success:
             continue
-        exe = os.path.join(
-            build_dir, "Debug/test_host.exe" if os.name == "nt" else "test_host"
-        )
+        exe = "test_host"
+        if os.name == "nt":
+            exe += ".exe"
+            if not os.path.isfile(os.path.join(build_dir, exe)):
+                exe = os.path.join("Debug", exe)
         for case, path in testcases.items():
             shutil.copy(path, os.path.join(run_dir, "fabm.yaml"))
             run(
                 f"test_harness/{host}/{case}",
-                [exe, "--simulate", "-n", "10"],
+                [os.path.join(build_dir, exe), "--simulate", "-n", "10"],
                 cwd=run_dir,
             )
 

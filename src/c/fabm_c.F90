@@ -5,8 +5,6 @@ module fabm_c
 
    use iso_c_binding, only: c_int, c_char, C_NULL_CHAR, c_f_pointer, c_loc, c_ptr, c_null_ptr, c_funptr, c_f_procpointer
 
-   !DIR$ ATTRIBUTES DLLEXPORT :: STATE_VARIABLE,DIAGNOSTIC_VARIABLE,CONSERVED_QUANTITY
-
    use fabm, only: type_fabm_model, type_fabm_variable, fabm_get_version, status_start_done, fabm_create_model
    use fabm_types, only: rke, attribute_length, type_model_list_node, type_base_model, &
                          factory, type_link, type_link_list, type_internal_variable, type_variable_list, type_variable_node, &
@@ -474,9 +472,9 @@ contains
       case (BOTTOM_STATE_VARIABLE)
          variable => model%p%bottom_state_variables(index)%target
       case (INTERIOR_DIAGNOSTIC_VARIABLE)
-         variable => model%p%interior_diagnostic_variables(index)%target
+         variable => model%p%interior_diagnostic_variables(index)%original
       case (HORIZONTAL_DIAGNOSTIC_VARIABLE)
-         variable => model%p%horizontal_diagnostic_variables(index)%target
+         variable => model%p%horizontal_diagnostic_variables(index)%original
       case (CONSERVED_QUANTITY)
          variable => model%p%conserved_quantities(index)%target
       case (INTERIOR_DEPENDENCY, HORIZONTAL_DEPENDENCY, SCALAR_DEPENDENCY)
@@ -536,23 +534,23 @@ contains
       has_default = logical2int(scalar_value%has_default)
    end subroutine get_parameter_metadata
 
-   subroutine get_coupling(pmodel, index, slave, master) bind(c)
+   subroutine get_coupling(pmodel, index, source, target) bind(c)
       !DIR$ ATTRIBUTES DLLEXPORT :: get_coupling
       type (c_ptr),   intent(in), value :: pmodel
       integer(c_int), intent(in), value :: index
-      type (c_ptr),   intent(out)       :: slave, master
+      type (c_ptr),   intent(out)       :: source, target
 
       type (type_model_wrapper), pointer :: model
-      type (type_link),pointer :: link_slave
+      type (type_link),pointer :: link_source
       integer                  :: i
 
       call c_f_pointer(pmodel, model)
-      link_slave => model%coupling_link_list%first
-      do i=2,index
-         link_slave => link_slave%next
+      link_source => model%coupling_link_list%first
+      do i = 2, index
+         link_source => link_source%next
       end do
-      slave = c_loc(link_slave%original)
-      master = c_loc(link_slave%target)
+      source = c_loc(link_source%original)
+      target = c_loc(link_source%target)
    end subroutine get_coupling
 
    function variable_get_suitable_masters(pmodel, pvariable) result(plist) bind(c)

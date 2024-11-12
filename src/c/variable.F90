@@ -28,20 +28,6 @@ contains
       call copy_to_c_string(variable%long_name, long_name)
    end subroutine variable_get_metadata
 
-   subroutine variable_get_output_name(pvariable, length, name) bind(c)
-      !DIR$ ATTRIBUTES DLLEXPORT :: variable_get_output_name
-      type (c_ptr),           intent(in), value              :: pvariable
-      integer(c_int),         intent(in), value              :: length
-      character(kind=c_char), intent(out), dimension(length) :: name
-
-      type (type_internal_variable), pointer :: variable
-      character(len=attribute_length)        :: name_
-
-      call c_f_pointer(pvariable, variable)
-      name_ = get_safe_name(variable%name)
-      call copy_to_c_string(name_, name)
-   end subroutine variable_get_output_name
-
    subroutine variable_get_long_path(pvariable, length, long_name) bind(c)
       !DIR$ ATTRIBUTES DLLEXPORT :: variable_get_long_path
       type (c_ptr),           intent(in), value              :: pvariable
@@ -70,8 +56,7 @@ contains
       type (type_internal_variable), pointer :: variable
 
       call c_f_pointer(pvariable, variable)
-      value = 0.0_rk
-      if (size(variable%background_values%pointers) > 0) value = variable%background_values%pointers(1)%p
+      value = variable%background_values%value
    end function variable_get_background_value
 
    function variable_get_missing_value(pvariable) bind(c) result(value)
@@ -90,10 +75,12 @@ contains
       type (c_ptr), value, intent(in) :: pvariable
       integer(kind=c_int)             :: value
 
+      integer                                :: output
       type (type_internal_variable), pointer :: variable
 
       call c_f_pointer(pvariable, variable)
-      value = logical2int(variable%output /= output_none)
+      output = iand(variable%output, not(output_always_available))
+      value = logical2int(output /= output_none)
    end function variable_get_output
 
    function variable_is_required(pvariable) bind(c) result(value)
@@ -119,7 +106,7 @@ contains
    end function variable_get_no_river_dilution
 
    function variable_get_no_precipitation_dilution(pvariable) bind(c) result(value)
-      !DIR$ ATTRIBUTES DLLEXPORT :: variable_get_no_precipitation_dilution
+   !DIR$ ATTRIBUTES DLLEXPORT :: variable_get_no_precipitation_dilution  ! reduced indentation to work around flang bug
       type (c_ptr), value, intent(in) :: pvariable
       integer(kind=c_int)             :: value
 
