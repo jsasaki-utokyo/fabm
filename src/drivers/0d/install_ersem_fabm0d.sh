@@ -1,4 +1,5 @@
 #!/bin/bash
+# install_ersem_fabm0d.sh
 
 CMAKE_FLAG=""
 while getopts "f:" flag; do
@@ -10,8 +11,10 @@ done
 CPU="$(nproc)"
 FABM_HOST=0d
 
-# Select ifort or gfortran
-CMAKE_Fortran_COMPILER=ifort
+# Specify ifx, ifort, or gfortran.
+CMAKE_Fortran_COMPILER=ifx
+# You may want to use -O3 for better performance but check whether the change in results are acceptable.
+# Default of -O2 will be used with commenting out the next line.
 # FFLAGS=-O3
 
 GOTM_BASE=~/Github/gotm/code
