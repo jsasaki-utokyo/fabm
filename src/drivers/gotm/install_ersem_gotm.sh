@@ -10,8 +10,10 @@ done
 
 CPU="$(nproc)"
 FABM_HOST=gotm
-# Select ifort or gfortran
-CMAKE_Fortran_COMPILER=ifort
+# Select ifx, ifort, or gfortran
+CMAKE_Fortran_COMPILER=ifx
+# You may want to use -O3 for better performance but check whether the change in results are acceptable.
+# Default of -O2 will be used with commenting out the next line.
 # FFLAGS=-O3
 GOTM_BASE=~/Github/gotm/code
 FABM_ERSEM_BASE=~/Github/ersem
