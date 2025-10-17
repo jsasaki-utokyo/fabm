@@ -11,8 +11,20 @@ done
 CPU="$(nproc)"
 FABM_HOST=0d
 
-# Specify ifx, ifort, or gfortran.
-CMAKE_Fortran_COMPILER=ifx
+# Specify ifx or gfortran (ifort is obsolete and not supported).
+# Prefer Intel oneAPI ifx; fall back to gfortran.
+if command -v ifx >/dev/null 2>&1; then
+  CMAKE_Fortran_COMPILER=ifx
+  FC=ifx
+elif command -v gfortran >/dev/null 2>&1; then
+  CMAKE_Fortran_COMPILER=gfortran
+  FC=gfortran
+else
+  echo "Error: neither ifx nor gfortran found in PATH." >&2
+  echo "Hint: install Intel oneAPI Fortran (ifx) or GNU Fortran (gfortran)."
+  exit 1
+fi
+
 # You may want to use -O3 for better performance but check whether the change in results are acceptable.
 # Default of -O2 will be used with commenting out the next line.
 # FFLAGS=-O3
