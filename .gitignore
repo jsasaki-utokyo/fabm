@@ -13,3 +13,6 @@
 /src/pyfabm/*.so
 /src/pyfabm/*.dylib
 
+
+# Ignore generated PDFs
+*.pdf
