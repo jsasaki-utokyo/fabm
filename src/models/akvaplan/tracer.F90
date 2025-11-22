@@ -41,7 +41,7 @@ contains
       class (type_tracer),intent(inout),target :: self
       integer,            intent(in)           :: configunit
 
-      real(rk)                        :: sp_vol, sp_dens
+      real(rk)                        :: sp_vol, sp_dens, c_initial
       logical                         :: conserved
       character(len=attribute_length) :: standard_name
 
@@ -53,8 +53,11 @@ contains
       if (self%temperature_dependence==1) call self%get_parameter(self%Q10,   'Q10',   '-',        'Q10 temperature coefficient (1: no temperature dependence)', minimum=1.0_rk)
       if (self%temperature_dependence==2) call self%get_parameter(self%E_a,   'E_a',   'J mol-1',  'activation energy for decay (0: no temperature dependence)', minimum=0.0_rk)
 
+      ! Read initial concentration from YAML (supports fabm.yaml initialization: section)
+      call self%get_parameter(c_initial, 'c_initial', 'quantity m-3', 'initial concentration', default=1.0_rk, minimum=0.0_rk)
+
       ! Register the model's own variables.
-      call self%register_state_variable(self%id_c,'c','quantity m-3','concentration',initial_value=1.0_rk,vertical_movement=-self%w,minimum=0.0_rk)
+      call self%register_state_variable(self%id_c,'c','quantity m-3','concentration',initial_value=c_initial,vertical_movement=-self%w,minimum=0.0_rk)
 
       ! Register environmental dependencies.
       call self%register_dependency(self%id_T,standard_variables%temperature)
